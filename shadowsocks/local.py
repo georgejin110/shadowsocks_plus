@@ -135,6 +135,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
 
             reply = init_send = None
             if d.startswith('CONNECT '):
+                d = d+recv_all(sock)
                 addr, port, addr_to_send = self.get_host_port(d, '443')
                 reply = 'HTTP/1.1 200 OK\r\n\r\n'
             elif d.startswith('GET ') or d.startswith('POST') or d.startswith('HEAD'):
