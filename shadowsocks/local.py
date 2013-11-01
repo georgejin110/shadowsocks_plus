@@ -56,19 +56,35 @@ def send_all(sock, data):
         if bytes_sent == len(data):
             return bytes_sent
 
+def recv_all(sock):
+    data = ''
+    while True:
+        d = sock.recv(4096)
+        data += d
+        if d.endswith('\r\n\r\n') or len(d)<=0:
+            break
+    return data
 
 class ThreadingTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
     allow_reuse_address = True
 
 
 class Socks5Server(SocketServer.StreamRequestHandler):
-    def handle_tcp(self, sock, remote):
+    def handle_tcp(self, sock, remote, addr, init_send):
         try:
             fdset = [sock, remote]
+
+            if init_send:
+                data = self.encrypt(init_send)
+                result = send_all(remote, data)
+                if result < len(data):
+                    raise Exception('failed to send all data')
+
             while True:
                 r, w, e = select.select(fdset, [], [])
                 if sock in r:
-                    data = self.encrypt(sock.recv(4096))
+                    d = sock.recv(4096)
+                    data = self.encrypt(d)
                     if len(data) <= 0:
                         break
                     result = send_all(remote, data)
@@ -83,6 +99,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
                     if result < len(data):
                         raise Exception('failed to send all data')
         finally:
+            logging.info('--close: %s', addr)
             sock.close()
             remote.close()
 
@@ -95,42 +112,71 @@ class Socks5Server(SocketServer.StreamRequestHandler):
     def send_encrypt(self, sock, data):
         sock.send(self.encrypt(data))
 
+    def get_host_port(self, d, p):
+        host = None
+        for k, v in [kv.split(': ') for kv in d.split('\r\n') if kv and ': ' in kv]:
+            if k=='Host':
+                host = v
+        if not host:
+            logging.error(d)
+        if ':' in host:
+            addr, port = host.split(':')
+        else:
+            addr, port = host, p
+        port = (int(port), )
+        addr_to_send = '\x03'+chr(len(addr))+addr+struct.pack('>H', port[0])
+        return addr, port, addr_to_send
+
     def handle(self):
         try:
             self.encryptor = encrypt.Encryptor(KEY, METHOD)
             sock = self.connection
-            sock.recv(262)
-            sock.send("\x05\x00")
-            data = self.rfile.read(4) or '\x00' * 4
-            mode = ord(data[1])
-            if mode != 1:
-                logging.warn('mode != 1')
-                return
-            addrtype = ord(data[3])
-            addr_to_send = data[3]
-            if addrtype == 1:
-                addr_ip = self.rfile.read(4)
-                addr = socket.inet_ntoa(addr_ip)
-                addr_to_send += addr_ip
-            elif addrtype == 3:
-                addr_len = self.rfile.read(1)
-                addr = self.rfile.read(ord(addr_len))
-                addr_to_send += addr_len + addr
-            elif addrtype == 4:
-                addr_ip = self.rfile.read(16)
-                addr = socket.inet_ntop(socket.AF_INET6, addr_ip)
-                addr_to_send += addr_ip
+            d = sock.recv(262)
+
+            reply = init_send = None
+            if d.startswith('CONNECT '):
+                addr, port, addr_to_send = self.get_host_port(d, '443')
+                reply = 'HTTP/1.1 200 OK\r\n\r\n'
+            elif d.startswith('GET ') or d.startswith('POST') or d.startswith('HEAD'):
+                d = d+recv_all(sock)
+                addr, port, addr_to_send = self.get_host_port(d, '80')
+                d = d.replace('Proxy-Connection:', 'Connection:')
+                init_send = d
             else:
-                logging.warn('addr_type not support')
-                # not support
-                return
-            addr_port = self.rfile.read(2)
-            addr_to_send += addr_port
-            port = struct.unpack('>H', addr_port)
-            try:
+                sock.send("\x05\x00")
+                data = self.rfile.read(4) or '\x00' * 4
+                mode = ord(data[1])
+                if mode != 1:
+                    logging.warn('mode != 1')
+                    logging.warn(d)
+                    return
+                addrtype = ord(data[3])
+                addr_to_send = data[3]
+                if addrtype == 1:
+                    addr_ip = self.rfile.read(4)
+                    addr = socket.inet_ntoa(addr_ip)
+                    addr_to_send += addr_ip
+                elif addrtype == 3:
+                    addr_len = self.rfile.read(1)
+                    addr = self.rfile.read(ord(addr_len))
+                    addr_to_send += addr_len + addr
+                elif addrtype == 4:
+                    addr_ip = self.rfile.read(16)
+                    addr = socket.inet_ntop(socket.AF_INET6, addr_ip)
+                    addr_to_send += addr_ip
+                else:
+                    logging.warn('addr_type not support')
+                    # not support
+                    return
+                addr_port = self.rfile.read(2)
+                addr_to_send += addr_port
+                port = struct.unpack('>H', addr_port)
                 reply = "\x05\x00\x00\x01"
                 reply += socket.inet_aton('0.0.0.0') + struct.pack(">H", 2222)
-                self.wfile.write(reply)
+
+            try:
+                if reply:
+                    self.wfile.write(reply)
                 # reply immediately
                 remote = socket.create_connection((SERVER, REMOTE_PORT))
                 self.send_encrypt(remote, addr_to_send)
@@ -138,7 +184,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
             except socket.error, e:
                 logging.warn(e)
                 return
-            self.handle_tcp(sock, remote)
+            self.handle_tcp(sock, remote, (addr, port[0]), init_send)
         except socket.error, e:
             logging.warn(e)
 
