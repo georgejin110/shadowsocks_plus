@@ -56,14 +56,25 @@ def send_all(sock, data):
         if bytes_sent == len(data):
             return bytes_sent
 
-def recv_all(sock, data):
+def recv_all(sock, data, delimeter):
     while True:
-        if data.endswith('\r\n\r\n'):
+        if data.find(delimeter)!=-1:
             break
         d = sock.recv(4096)
         if len(d)<=0:
             break
         data += d
+    return data
+
+def recv_size(sock, size):
+    data = ''
+    while True:
+        d = sock.recv(4096)
+        if len(d)<=0:
+            break
+        data += d
+        if len(data)>=size:
+            break
     return data
 
 class ThreadingTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
@@ -112,14 +123,15 @@ class Socks5Server(SocketServer.StreamRequestHandler):
 
     def send_encrypt(self, sock, data):
         sock.send(self.encrypt(data))
+    
+    def parse_header(self, d):
+        return dict([kv.split(': ') for kv in d.split('\r\n') if kv and ': ' in kv])
 
     def get_host_port(self, d, p):
-        host = None
-        for k, v in [kv.split(': ') for kv in d.split('\r\n') if kv and ': ' in kv]:
-            if k=='Host':
-                host = v
+        host = self.parse_header(d).get('Host')
         if not host:
             logging.error(d)
+            return
         if ':' in host:
             addr, port = host.split(':')
         else:
@@ -136,11 +148,25 @@ class Socks5Server(SocketServer.StreamRequestHandler):
 
             reply = init_send = None
             if d.startswith('CONNECT '):
-                d = recv_all(sock, d)
+                d = recv_all(sock, d, '\r\n\r\n')
                 addr, port, addr_to_send = self.get_host_port(d, '443')
                 reply = 'HTTP/1.1 200 OK\r\n\r\n'
-            elif d.startswith('GET ') or d.startswith('POST') or d.startswith('HEAD'):
-                d = recv_all(sock, d)
+            elif d.startswith('GET ') or d.startswith('HEAD'):
+                d = recv_all(sock, d, '\r\n\r\n')
+                addr, port, addr_to_send = self.get_host_port(d, '80')
+                d = d.replace('Proxy-Connection:', 'Connection:')
+                init_send = d
+            elif d.startswith('POST'):
+                d = recv_all(sock, d, '\r\n\r\n')
+                i = d.find('\r\n\r\n')
+                remain = len(d)-(i+4)
+                header = self.parse_header(d)
+                if 'Content-Length' not in header:
+                    logging.error(d)
+                    return
+                size = int(header['Content-Length'])-remain
+                if size>0:
+                    d += sock.recv_size(size)
                 addr, port, addr_to_send = self.get_host_port(d, '80')
                 d = d.replace('Proxy-Connection:', 'Connection:')
                 init_send = d
