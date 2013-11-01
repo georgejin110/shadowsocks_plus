@@ -166,7 +166,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
                     return
                 size = int(header['Content-Length'])-remain
                 if size>0:
-                    d += sock.recv_size(size)
+                    d += recv_size(sock, size)
                 addr, port, addr_to_send = self.get_host_port(d, '80')
                 d = d.replace('Proxy-Connection:', 'Connection:')
                 init_send = d
