@@ -56,13 +56,14 @@ def send_all(sock, data):
         if bytes_sent == len(data):
             return bytes_sent
 
-def recv_all(sock):
-    data = ''
+def recv_all(sock, data):
     while True:
-        d = sock.recv(4096)
-        data += d
-        if d.endswith('\r\n\r\n') or len(d)<=0:
+        if data.endswith('\r\n\r\n'):
             break
+        d = sock.recv(4096)
+        if len(d)<=0:
+            break
+        data += d
     return data
 
 class ThreadingTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
@@ -135,11 +136,11 @@ class Socks5Server(SocketServer.StreamRequestHandler):
 
             reply = init_send = None
             if d.startswith('CONNECT '):
-                d = d+recv_all(sock)
+                d = recv_all(sock, d)
                 addr, port, addr_to_send = self.get_host_port(d, '443')
                 reply = 'HTTP/1.1 200 OK\r\n\r\n'
             elif d.startswith('GET ') or d.startswith('POST') or d.startswith('HEAD'):
-                d = d+recv_all(sock)
+                d = recv_all(sock, d)
                 addr, port, addr_to_send = self.get_host_port(d, '80')
                 d = d.replace('Proxy-Connection:', 'Connection:')
                 init_send = d
