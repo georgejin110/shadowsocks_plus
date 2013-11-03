@@ -125,7 +125,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
         sock.send(self.encrypt(data))
     
     def parse_header(self, d):
-        return dict([kv.split(': ') for kv in d.split('\r\n') if kv and ': ' in kv])
+        return dict([kv.split(': ', 1) for kv in d.split('\r\n') if kv and ': ' in kv])
 
     def get_host_port(self, d, p):
         host = self.parse_header(d).get('Host')
