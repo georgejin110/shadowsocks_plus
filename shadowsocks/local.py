@@ -154,6 +154,15 @@ class Socks5Server(SocketServer.StreamRequestHandler):
             elif d.startswith('GET ') or d.startswith('HEAD'):
                 d = recv_all(sock, d, '\r\n\r\n')
                 addr, port, addr_to_send = self.get_host_port(d, '80')
+                if port[0]==PORT and (addr.startswith('192.168') or addr.startswith('127.0')):
+                    mimetype = 'application/x-ns-proxy-autoconfig'
+                    with open('proxy.pac', 'rb') as fp:
+                        data = fp.read()
+                        self.wfile.write('HTTP/1.1 200\r\nContent-Type: %s\r\nContent-Length: %s\r\n\r\n' % (mimetype, len(data)))
+                        self.wfile.write(data)
+                    sock.close()
+                    logging.info('get proxy pac')
+                    return
                 d = d.replace('Proxy-Connection:', 'Connection:')
                 init_send = d
             elif d.startswith('POST'):
