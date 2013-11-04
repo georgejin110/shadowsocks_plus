@@ -44,6 +44,7 @@ import logging
 import getopt
 import encrypt
 import utils
+import urlparse
 
 
 def send_all(sock, data):
@@ -127,18 +128,35 @@ class Socks5Server(SocketServer.StreamRequestHandler):
     def parse_header(self, d):
         return dict([kv.split(': ', 1) for kv in d.split('\r\n') if kv and ': ' in kv])
 
-    def get_host_port(self, d, p):
-        host = self.parse_header(d).get('Host')
-        if not host:
-            logging.error(d)
-            return
-        if ':' in host:
-            addr, port = host.split(':')
+    def get_host_port(self, d, p, from_first_line=False):
+        if from_first_line:
+            addr, port = d.split('\r\n')[0].split()[1].split(':')
         else:
-            addr, port = host, p
+            host = self.parse_header(d).get('Host')
+            if not host:
+                logging.error(d)
+                return
+            if ':' in host:
+                addr, port = host.split(':')
+            else:
+                addr, port = host, p
         port = (int(port), )
         addr_to_send = '\x03'+chr(len(addr))+addr+struct.pack('>H', port[0])
         return addr, port, addr_to_send
+
+    def clean_path(self, d):
+        r =d.split('\r\n')
+        m = r[0].split()
+        if m[1].startswith('http'):
+            m[1] = urlparse.urlparse(m[1])
+            if m[1].query:
+                m[1] = m[1].path+'?'+m[1].query
+            else:
+                m[1] = m[1].path
+            r[0] = ' '.join(m)
+            return '\r\n'.join(r)
+        else:
+            return d
 
     def handle(self):
         try:
@@ -149,11 +167,12 @@ class Socks5Server(SocketServer.StreamRequestHandler):
             reply = init_send = None
             if d.startswith('CONNECT '):
                 d = recv_all(sock, d, '\r\n\r\n')
-                addr, port, addr_to_send = self.get_host_port(d, '443')
+                addr, port, addr_to_send = self.get_host_port(d, '443', from_first_line=True)
                 reply = 'HTTP/1.1 200 OK\r\n\r\n'
             elif d.startswith('GET ') or d.startswith('HEAD'):
                 d = recv_all(sock, d, '\r\n\r\n')
                 addr, port, addr_to_send = self.get_host_port(d, '80')
+                d = self.clean_path(d)
                 if port[0]==PORT and (addr.startswith('192.168') or addr.startswith('127.0')):
                     mimetype = 'application/x-ns-proxy-autoconfig'
                     with open('proxy.pac', 'rb') as fp:
@@ -177,6 +196,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
                 if size>0:
                     d += recv_size(sock, size)
                 addr, port, addr_to_send = self.get_host_port(d, '80')
+                d = self.clean_path(d)
                 d = d.replace('Proxy-Connection:', 'Connection:')
                 init_send = d
             else:
