@@ -169,7 +169,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
                 d = recv_all(sock, d, '\r\n\r\n')
                 addr, port, addr_to_send = self.get_host_port(d, '443', from_first_line=True)
                 reply = 'HTTP/1.1 200 OK\r\n\r\n'
-            elif d.startswith('GET ') or d.startswith('HEAD'):
+            elif d.startswith('GET ') or d.startswith('HEAD '):
                 d = recv_all(sock, d, '\r\n\r\n')
                 addr, port, addr_to_send = self.get_host_port(d, '80')
                 d = self.clean_path(d)
@@ -184,7 +184,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
                     return
                 d = d.replace('Proxy-Connection:', 'Connection:')
                 init_send = d
-            elif d.startswith('POST'):
+            elif d.startswith('POST '):
                 d = recv_all(sock, d, '\r\n\r\n')
                 i = d.find('\r\n\r\n')
                 remain = len(d)-(i+4)
